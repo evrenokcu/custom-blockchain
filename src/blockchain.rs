@@ -1,13 +1,19 @@
+use core::panic;
 use std::{
+    collections::HashMap,
     env::current_dir,
     sync::{Arc, RwLock},
 };
 
-use sled::{transaction::TransactionResult, Db, Tree};
+use data_encoding::HEXLOWER;
+use sled::{
+    transaction::{self, TransactionResult},
+    Db, Tree,
+};
 
 use crate::{
-    block::{Block, HashFn, TimestampProvider},
-    transaction::Transaction,
+    block::{Block, Hash, HashFn, SignVerifyFn, TimestampProvider},
+    transaction::{TXOutput, Transaction},
 };
 
 const DATA_FOLDER: &'static str = "Data";
@@ -56,6 +62,166 @@ impl Blockchain {
             let _ = tx_db.insert(TIP_BLOCK_HASH_KEY, block_hash);
             Ok(())
         });
+    }
+    fn get_db(&self) -> &Db {
+        &self.db
+    }
+    fn get_tip_hash(&self) -> Hash {
+        //todo; return error here
+        self.tip_hash.read().unwrap().clone()
+    }
+    fn set_tip_hash(&self, new_tip_hash: &Hash) {
+        let mut tip_hash = self.tip_hash.write().unwrap();
+        *tip_hash = Hash::from(new_tip_hash);
+    }
+    fn iterator(&self) -> BlockchainIterator {
+        BlockchainIterator::new(self.get_tip_hash(), self.db.clone())
+    }
+    pub fn mine_block(
+        &self,
+        transactions: &[Transaction],
+        hash_fn: HashFn,
+        sign_verify_fn: SignVerifyFn,
+        ts_provider: TimestampProvider,
+    ) -> Block {
+        for transaction in transactions {
+            if (transaction.verify(self, hash_fn, sign_verify_fn)) == false {
+                panic!("ERROR: Invalid transaction")
+            }
+        }
+        let best_height = self.get_best_height();
+        let block = Block::new(
+            ts_provider,
+            hash_fn,
+            self.get_tip_hash(),
+            transactions,
+            best_height + 1,
+        );
+        let block_hash = block.get_hash();
+
+        let blocks_tree = self.db.open_tree(BLOCKS_TREE).unwrap();
+        Self::update_blocks_tree(&blocks_tree, &block);
+        self.set_tip_hash(block_hash);
+
+        block
+    }
+    pub fn get_best_height(&self) -> usize {
+        let block_tree = self.db.open_tree(BLOCKS_TREE).unwrap();
+        let tip_block_bytes = block_tree
+            .get(self.get_tip_hash())
+            .unwrap()
+            .expect("The tip hash is valid");
+        let tip_block = Block::deserialize(tip_block_bytes.as_ref()).unwrap();
+        tip_block.get_height()
+    }
+
+    pub fn find_transaction(&self, txid: &[u8]) -> Option<Transaction> {
+        let mut iterator = self.iterator();
+        loop {
+            let option = iterator.next();
+            if option.is_none() {
+                break;
+            }
+            let block = option.unwrap();
+            for transaction in block.get_transactions() {
+                if txid.eq(transaction.get_id()) {
+                    return Some(transaction.clone());
+                }
+            }
+        }
+        None
+    }
+    pub fn add_block(&self, block: &Block) {
+        let block_tree = self.db.open_tree(BLOCKS_TREE).unwrap();
+        if let Some(_) = block_tree.get(block.get_hash()).unwrap() {
+            return;
+        }
+        let _: TransactionResult<(), ()> = block_tree.transaction(|tx_db| {
+            let _ = tx_db
+                .insert(block.get_hash().as_str(), block.serialize().unwrap())
+                .unwrap();
+            let tip_block_bytes = tx_db
+                .get(self.get_tip_hash())
+                .unwrap()
+                .expect("The tip hash is not valid");
+            let tip_block = Block::deserialize(tip_block_bytes.as_ref()).unwrap();
+            if block.get_height() > tip_block.get_height() {
+                let _ = tx_db
+                    .insert(TIP_BLOCK_HASH_KEY, block.get_hash().as_str())
+                    .unwrap();
+                self.set_tip_hash(block.get_hash());
+            }
+            Ok(())
+        });
+    }
+    pub fn find_utxo(&self) -> HashMap<String, Vec<TXOutput>> {
+        let mut utxo: HashMap<String, Vec<TXOutput>> = HashMap::new();
+        let mut spent_txos: HashMap<String, Vec<usize>> = HashMap::new();
+
+        let mut iterator = self.iterator();
+        loop {
+            let option = iterator.next();
+            if option.is_none() {
+                break;
+            }
+            let block = option.unwrap();
+            'outer: for tx in block.get_transactions() {
+                let txid_hex = HEXLOWER.encode(tx.get_id());
+                for (idx, out) in tx.get_vout().iter().enumerate() {
+                    if let Some(outs) = spent_txos.get(txid_hex.as_str()) {
+                        for spend_out_idx in outs {
+                            if idx.eq(spend_out_idx) {
+                                continue 'outer;
+                            }
+                        }
+                    }
+                    if utxo.contains_key(txid_hex.as_str()) {
+                        utxo.get_mut(txid_hex.as_str()).unwrap().push(out.clone());
+                    } else {
+                        utxo.insert(txid_hex.clone(), vec![out.clone()]);
+                    }
+                }
+                if tx.is_coinbase() {
+                    continue;
+                }
+
+                for txin in tx.get_vin() {
+                    let txid_hex = HEXLOWER.encode(txin.get_txid());
+                    if spent_txos.contains_key(txid_hex.as_str()) {
+                        spent_txos
+                            .get_mut(txid_hex.as_str())
+                            .unwrap()
+                            .push(txin.get_vout());
+                    } else {
+                        spent_txos.insert(txid_hex, vec![txin.get_vout()]);
+                    }
+                }
+            }
+        }
+        utxo
+    }
+}
+pub struct BlockchainIterator {
+    db: Db,
+    current_hash: String,
+}
+impl BlockchainIterator {
+    fn new(tip_hash: Hash, db: Db) -> BlockchainIterator {
+        BlockchainIterator {
+            current_hash: tip_hash,
+            db,
+        }
+    }
+
+    pub fn next(&mut self) -> Option<Block> {
+        let block_tree = self.db.open_tree(BLOCKS_TREE).unwrap();
+        let data = block_tree.get(self.current_hash.clone()).unwrap();
+        if data.is_none() {
+            return None;
+        }
+        let block = Block::deserialize(data.unwrap().to_vec().as_slice()).unwrap();
+        self.current_hash = block.get_pre_block_hash().clone();
+        return Some(block);
     }
 }
 

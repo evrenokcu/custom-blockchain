@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{block::HashFn, wallet};
+use crate::{
+    block::{HashFn, SignVerifyFn},
+    blockchain::Blockchain,
+    wallet,
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Transaction {
@@ -50,6 +54,65 @@ impl Transaction {
     pub fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
         Ok(bincode::serialize(self)?.to_vec())
     }
+    pub fn verify(
+        &self,
+        blockchain: &Blockchain,
+        hash_fn: HashFn,
+        sign_verify_fn: SignVerifyFn,
+    ) -> bool {
+        if self.is_coinbase() {
+            return true;
+        }
+        let mut tx_copy = self.trimmed_copy();
+        for (idx, vin) in self.vin.iter().enumerate() {
+            let prev_tx_option = blockchain.find_transaction(vin.get_txid());
+            if prev_tx_option.is_none() {
+                panic!("ERROR: Previous transaction is not correct")
+            }
+            let prev_tx = prev_tx_option.unwrap();
+            tx_copy.vin[idx].signature = vec![];
+            tx_copy.vin[idx].pub_key = prev_tx.vout[vin.vout].pub_key_hash.clone();
+            tx_copy.id = tx_copy.hash(hash_fn).unwrap();
+            tx_copy.vin[idx].pub_key = vec![];
+
+            let verify = sign_verify_fn(
+                vin.pub_key.as_slice(),
+                vin.signature.as_slice(),
+                tx_copy.get_id(),
+            );
+            if !verify {
+                return false;
+            }
+        }
+        true
+    }
+    fn trimmed_copy(&self) -> Transaction {
+        let mut inputs = vec![];
+        let mut outputs = vec![];
+        for input in &self.vin {
+            let txinput = TXInput::new(input.get_txid(), input.get_vout());
+            inputs.push(txinput);
+        }
+        for output in &self.vout {
+            outputs.push(output.clone());
+        }
+        Transaction {
+            id: self.id.clone(),
+            vin: inputs,
+            vout: outputs,
+        }
+    }
+    pub fn is_coinbase(&self) -> bool {
+        return self.vin.len() == 1 && self.vin[0].pub_key.len() == 0;
+    }
+
+    pub fn get_vout(&self) -> &[TXOutput] {
+        self.vout.as_slice()
+    }
+
+    pub fn get_vin(&self) -> &[TXInput] {
+        self.vin.as_slice()
+    }
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct TXInput {
@@ -57,6 +120,24 @@ pub struct TXInput {
     vout: usize,
     signature: Vec<u8>,
     pub_key: Vec<u8>,
+}
+impl TXInput {
+    pub fn new(txid: &[u8], vout: usize) -> TXInput {
+        TXInput {
+            txid: txid.to_vec(),
+            vout,
+            signature: vec![],
+            pub_key: vec![],
+        }
+    }
+
+    pub fn get_txid(&self) -> &[u8] {
+        self.txid.as_slice()
+    }
+
+    pub fn get_vout(&self) -> usize {
+        self.vout
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TXOutput {

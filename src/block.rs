@@ -24,6 +24,7 @@ impl From<Block> for IVec {
     }
 }
 pub type HashFn = fn(&[u8]) -> Vec<u8>;
+pub type SignVerifyFn = fn(public_key: &[u8], signature: &[u8], message: &[u8]) -> bool;
 
 impl Block {
     fn new_block(
@@ -113,6 +114,10 @@ impl Block {
             &transactions,
             0,
         );
+    }
+
+    pub(crate) fn get_height(&self) -> usize {
+        self.height
     }
 }
 // impl TryFrom<Block> for IVec {
