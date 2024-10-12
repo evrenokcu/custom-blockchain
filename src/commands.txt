@@ -1,0 +1,19 @@
+My wallet address; 19rh1bDp8jSkeLdZbPxj2zNwgAfbq2QKKn
+19QXwSnG3P93d2fzLg8YmDA7D2CDP3Qtjs
+
+./custom-blockchain createblockchain 19rh1bDp8jSkeLdZbPxj2zNwgAfbq2QKKn
+./custom-blockchain getbalance  19rh1bDp8jSkeLdZbPxj2zNwgAfbq2QKKn
+
+./custom-blockchain startnode  19rh1bDp8jSkeLdZbPxj2zNwgAfbq2QKKn
+
+
+
+./custom-blockchain send  19rh1bDp8jSkeLdZbPxj2zNwgAfbq2QKKn  19QXwSnG3P93d2fzLg8YmDA7D2CDP3Qtjs  4 1
+./custom-blockchain listaddresses
+./custom-blockchain printchain
+./custom-blockchain reindexutxo
+
+
+
+1AH8sUWqxWkSog2EBF7Wniss6YxNctsZkX
+16pXn7VRuMdZqV8Y6s2v1RfAXaTMeu7QoP

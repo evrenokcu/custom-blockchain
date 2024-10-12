@@ -54,6 +54,19 @@ impl Blockchain {
             db,
         })
     }
+    pub fn get_block_hashes(&self) -> Vec<Vec<u8>> {
+        let mut iterator = self.iterator();
+        let mut blocks = vec![];
+        loop {
+            let option = iterator.next();
+            if option.is_none() {
+                break;
+            }
+            let block = option.unwrap();
+            blocks.push(block.get_hash_bytes());
+        }
+        blocks
+    }
 
     fn update_blocks_tree(blocks_tree: &Tree, block: &Block) {
         let block_hash = block.get_hash().as_str();
@@ -63,7 +76,7 @@ impl Blockchain {
             Ok(())
         });
     }
-    fn get_db(&self) -> &Db {
+    pub(crate) fn get_db(&self) -> &Db {
         &self.db
     }
     fn get_tip_hash(&self) -> Hash {
@@ -74,7 +87,7 @@ impl Blockchain {
         let mut tip_hash = self.tip_hash.write().unwrap();
         *tip_hash = Hash::from(new_tip_hash);
     }
-    fn iterator(&self) -> BlockchainIterator {
+    pub fn iterator(&self) -> BlockchainIterator {
         BlockchainIterator::new(self.get_tip_hash(), self.db.clone())
     }
     pub fn mine_block(
@@ -199,6 +212,27 @@ impl Blockchain {
             }
         }
         utxo
+    }
+    pub fn get_block(&self, block_hash: &[u8]) -> Option<Block> {
+        let block_tree = self.db.open_tree(BLOCKS_TREE).unwrap();
+        if let Some(block_bytes) = block_tree.get(block_hash).unwrap() {
+            let block = Block::deserialize(block_bytes.as_ref()).unwrap();
+            return Some(block);
+        }
+        return None;
+    }
+    pub fn new_blockchain() -> Blockchain {
+        let db = sled::open(current_dir().unwrap().join("data")).unwrap();
+        let blocks_tree = db.open_tree(BLOCKS_TREE).unwrap();
+        let tip_bytes = blocks_tree
+            .get(TIP_BLOCK_HASH_KEY)
+            .unwrap()
+            .expect("No existing blockchain found. Create one first.");
+        let tip_hash = String::from_utf8(tip_bytes.to_vec()).unwrap();
+        Blockchain {
+            tip_hash: Arc::new(RwLock::new(tip_hash)),
+            db,
+        }
     }
 }
 pub struct BlockchainIterator {

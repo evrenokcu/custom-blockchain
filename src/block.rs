@@ -25,7 +25,7 @@ impl From<Block> for IVec {
 }
 pub type HashFn = fn(&[u8]) -> Vec<u8>;
 pub type SignVerifyFn = fn(public_key: &[u8], signature: &[u8], message: &[u8]) -> bool;
-
+pub type SignFn = fn(pkcs8: &[u8], message: &[u8]) -> Vec<u8>;
 impl Block {
     fn new_block(
         ts_provider: TimestampProvider,
@@ -118,6 +118,9 @@ impl Block {
 
     pub(crate) fn get_height(&self) -> usize {
         self.height
+    }
+    pub fn get_hash_bytes(&self) -> Vec<u8> {
+        self.hash.as_bytes().to_vec()
     }
 }
 // impl TryFrom<Block> for IVec {
